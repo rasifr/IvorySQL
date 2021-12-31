@@ -270,6 +270,10 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
 	struct SelectLimit	*selectlimit;
 	SetQuantifier	 setquantifier;
 	struct GroupClause  *groupclause;
+
+	HierarClause		*hierarClause;
+	ConnectBy			*connectBy;
+	StartWith			*startWith;
 }
 
 %type <node>	stmt toplevel_stmt schema_stmt routine_body_stmt
@@ -647,6 +651,10 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
 %type <typnam>	package_var_type
 %type <boolean> return_or_not
 
+%type <hierarClause>	hierarchical_query_clause
+%type <startWith>	start_with_clause opt_start_with_clause
+%type <connectBy>	connect_by_clause
+%type <boolean>		opt_nocycle
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -683,7 +691,7 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
+	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT CONNECT
 	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
 	COST CREATE CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
@@ -721,7 +729,7 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
 	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUS MINUTE_P MINVALUE MODE MODIFY
 	MONTH_P MOVE
 
-	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NFC NFD NFKC NFKD NO NONE
+	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NFC NFD NFKC NFKD NO NOCYCLE NONE
 	NORMALIZE NORMALIZED
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
@@ -768,7 +776,8 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
 	ZONE
 
 	/* HG constructs */
-	AUTHID PACKAGE BODY ROWTYPE_P ELSIF EXCEPTION LOOP WHILE
+	AUTHID PACKAGE BODY ROWTYPE_P ELSIF EXCEPTION LOOP WHILE SYS_CONNECT_BY_PATH
+	CONNECT_BY_ROOT
 
 /*
  * The grammar thinks these are keywords, but they are not in the kwlist.h
@@ -780,7 +789,7 @@ static void check_pkgname(List *pkgname, char *end_name, core_yyscan_t yyscanner
  * as NOT, at least with respect to their left-hand subexpression.
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
-%token		NOT_LA NULLS_LA WITH_LA PACKAGE_BODY
+%token		NOT_LA NULLS_LA WITH_LA PACKAGE_BODY CONNECT_P START_P
 
 /*
  * The grammar likewise thinks these tokens are keywords, but they are never
@@ -4586,7 +4595,11 @@ SeqOptElem: AS SimpleTypename
 					/* not documented, only used by pg_dump */
 					$$ = makeDefElem("sequence_name", (Node *)$3, @1);
 				}
-			| START opt_with NumericOnly
+			| START NumericOnly
+				{
+					$$ = makeDefElem("start", (Node *)$2, @1);
+				}
+			| START_P WITH NumericOnly
 				{
 					$$ = makeDefElem("start", (Node *)$3, @1);
 				}
@@ -12399,7 +12412,7 @@ select_clause:
  */
 simple_select:
 			SELECT opt_all_clause opt_target_list
-			into_clause from_clause where_clause
+			into_clause from_clause where_clause hierarchical_query_clause
 			group_clause having_clause window_clause
 				{
 					SelectStmt *n = makeNode(SelectStmt);
@@ -12407,10 +12420,11 @@ simple_select:
 					n->intoClause = $4;
 					n->fromClause = $5;
 					n->whereClause = $6;
-					n->groupClause = ($7)->list;
-					n->groupDistinct = ($7)->distinct;
-					n->havingClause = $8;
-					n->windowClause = $9;
+					n->hierarClause = $7;
+					n->groupClause = ($8)->list;
+					n->groupDistinct = ($8)->distinct;
+					n->havingClause = $9;
+					n->windowClause = $10;
 					$$ = (Node *)n;
 				}
 			| SELECT distinct_clause target_list
@@ -12466,6 +12480,81 @@ simple_select:
 					$$ = makeSetOp(SETOP_EXCEPT, $3 == SET_QUANTIFIER_ALL, $1, $4);
 				}
 		;
+
+hierarchical_query_clause:
+			{
+				$$ = NULL;
+			}
+		| start_with_clause connect_by_clause
+			{
+				HierarClause *n = makeNode(HierarClause);
+
+				n->startWith = $1;
+				n->connectBy = $2;
+
+				if (n->startWith != NULL &&
+					n->connectBy->startWith != NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("duplicate START WITH clause specified"),
+							 parser_errposition(@1)));
+
+				$$ = n;
+			}
+		| connect_by_clause
+			{
+				HierarClause *n = makeNode(HierarClause);
+
+				n->connectBy = $1;
+				n->startWith = $1->startWith;
+
+				$$ = n;
+			}
+		;
+
+start_with_clause:
+		START_P WITH a_expr
+			{
+				StartWith *n = makeNode(StartWith);
+
+				n->condition = $3;
+				$$ = n;
+			}
+		;
+
+connect_by_clause:
+		CONNECT_P BY opt_nocycle a_expr opt_start_with_clause
+			{
+				ConnectBy *n = makeNode(ConnectBy);
+
+				n->nocycle = $3;
+				n->condition = $4;
+				n->startWith = $5;
+
+				$$ = n;
+			}
+		;
+
+opt_start_with_clause:
+			{
+				$$ = NULL;
+			}
+		| start_with_clause
+			{
+				$$ = $1;
+			}
+		;
+
+opt_nocycle:
+			{
+				$$ = false;
+			}
+		| NOCYCLE
+			{
+				$$ = true;
+			}
+		;
+
 
 /*
  * SQL standard WITH clause looks like:
@@ -14216,6 +14305,20 @@ interval_second:
  * you expect!  So we use %prec annotations freely to set precedences.
  */
 a_expr:		c_expr									{ $$ = $1; }
+			| PRIOR c_expr
+				{
+					PriorClause *n = makeNode(PriorClause);
+					n->expr = $2;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+			| CONNECT_BY_ROOT c_expr
+				{
+					ConnectRoot *n = makeNode(ConnectRoot);
+					n->expr = $2;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
 			| a_expr TYPECAST Typename
 					{ $$ = makeTypeCast($1, $3, @2); }
 			| a_expr COLLATE any_name
@@ -14856,6 +14959,7 @@ c_expr:		columnref								{ $$ = $1; }
 				  g->location = @1;
 				  $$ = (Node *)g;
 			  }
+
 		;
 
 func_application: func_name '(' ')'
@@ -15283,6 +15387,15 @@ func_expr_common_subexpr:
 					n->typeName = $6;
 					n->location = @1;
 					$$ = (Node *)n;
+				}
+			| SYS_CONNECT_BY_PATH '(' a_expr ',' a_expr ')'
+				{
+					SysConnectPath *n = makeNode(SysConnectPath);
+
+					n->expr = $3;
+					n->chr = $5;
+					n->location = @1;
+					$$ = (Node *) n;
 				}
 		;
 
@@ -16475,6 +16588,7 @@ unreserved_keyword:
 			| COMPRESSION
 			| CONFIGURATION
 			| CONFLICT
+			| CONNECT
 			| CONNECTION
 			| CONSTRAINTS
 			| CONTENT_P
@@ -16629,7 +16743,6 @@ unreserved_keyword:
 			| PREPARE
 			| PREPARED
 			| PRESERVE
-			| PRIOR
 			| PRIVILEGES
 			| PROCEDURAL
 			| PROCEDURE
@@ -16793,6 +16906,7 @@ col_name_keyword:
 			| SETOF
 			| SMALLINT
 			| SUBSTRING
+			| SYS_CONNECT_BY_PATH
 			| TIME
 			| TIMESTAMP
 			| TREAT
@@ -16872,6 +16986,7 @@ reserved_keyword:
 			| CHECK
 			| COLLATE
 			| COLUMN
+			| CONNECT_BY_ROOT
 			| CONSTRAINT
 			| CREATE
 			| CURRENT_CATALOG
@@ -16906,6 +17021,7 @@ reserved_keyword:
 			| LOCALTIME
 			| LOCALTIMESTAMP
 			| MINUS
+			| NOCYCLE
 			| NOT
 			| NULL_P
 			| OFFSET
@@ -16915,6 +17031,7 @@ reserved_keyword:
 			| ORDER
 			| PLACING
 			| PRIMARY
+			| PRIOR
 			| REFERENCES
 			| RETURNING
 			| SELECT
@@ -17014,7 +17131,9 @@ bare_label_keyword:
 			| CONCURRENTLY
 			| CONFIGURATION
 			| CONFLICT
+			| CONNECT
 			| CONNECTION
+			| CONNECT_BY_ROOT
 			| CONSTRAINT
 			| CONSTRAINTS
 			| CONTENT_P
@@ -17178,6 +17297,7 @@ bare_label_keyword:
 			| NFKC
 			| NFKD
 			| NO
+			| NOCYCLE
 			| NONE
 			| NORMALIZE
 			| NORMALIZED
@@ -17309,6 +17429,7 @@ bare_label_keyword:
 			| SYSID
 			| SYSTEM_P
 			| SYSTIMESTAMP
+			| SYS_CONNECT_BY_PATH
 			| TABLE
 			| TABLES
 			| TABLESAMPLE

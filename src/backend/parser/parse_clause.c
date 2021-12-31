@@ -29,6 +29,7 @@
 #include "commands/defrem.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/print.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
@@ -1744,7 +1745,6 @@ transformWhereClause(ParseState *pstate, Node *clause,
 		return NULL;
 
 	qual = transformExpr(pstate, clause, exprKind);
-
 	qual = coerce_to_boolean(pstate, qual, constructName);
 
 	return qual;

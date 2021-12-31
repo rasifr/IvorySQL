@@ -153,6 +153,12 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 		case PACKAGE:
 			cur_token_length = 7;
 			break;
+		case START:
+			cur_token_length = 5;
+			break;
+		case CONNECT:
+			cur_token_length = 7;
+			break;
 		default:
 			return cur_token;
 	}
@@ -299,6 +305,16 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 		case PACKAGE:
 			if (next_token == BODY)
 				cur_token = PACKAGE_BODY;
+			break;
+
+		case START:
+			if (next_token == WITH)
+				cur_token = START_P;
+			break;
+
+		case CONNECT:
+			if (next_token == BY)
+				cur_token = CONNECT_P;
 			break;
 	}
 
