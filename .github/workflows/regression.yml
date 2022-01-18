@@ -2,9 +2,9 @@ name: regression
 
 on:
   push:
-    branches: [ master, IVORY_REL_1_STABLE ]
+    branches: [ master, IVORY_REL_1_STABLE regression_test ]
   pull_request:
-    branches: [ master, IVORY_REL_1_STABLE ]
+    branches: [ master, IVORY_REL_1_STABLE regression_test ]
 
 jobs:
   regression:
