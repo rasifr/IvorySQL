@@ -1,5 +1,6 @@
 name: build
 
+# Test
 on:
   push:
     branches: [ master, IVORY_REL_1_STABLE, regression_test ]
