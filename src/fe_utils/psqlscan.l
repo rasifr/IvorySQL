@@ -140,6 +140,7 @@ extern void psql_yyset_column(int column_no, yyscan_t yyscanner);
 %x xus
 %x xf
 %x xdq
+%x dx
 
 /*
  * In order to make the world safe for Windows and Mac clients as well as
@@ -231,6 +232,28 @@ xqinside		[^']+
 as_or_is		([aA][sS])|([iI][sS])
 create_fun		{as_or_is}
 xfinside		[^ \n\r']+
+
+/* DECLARE CURSOR combinations */
+declare_kw		[dD][eE][cC][lL][aA][rR][eE]
+cursor_kw		[cC][uU][rR][sS][oO][rR]
+binary_kw		[bB][iI][nN][aA][rR][yY]
+asensitive_kw	[aA][sS][eE][nN][sS][iI][tT][iI][vV][eE]
+insensitive_kw	[iI][nN][sS][eE][nN][sS][iI][tT][iI][vV][eE]
+scroll_kw		[sS][cC][rR][oO][lL][lL]
+noscroll_kw 	[nN][oO]{whitespace}+{scroll_kw}
+
+/* Transaction combinations */
+begin_kw		[bB][eE][gG][iI][nN]
+end_kw			[eE][nN][dD]
+case_kw  		[cC][aA][sS][eE]
+if_kw			[iI][fF]
+loop_kw 		[lL][oO][oO][pP]
+atomic_kw		[aA][tT][oO][mM][iI][cC]
+work_kw 		[wW][oO][rR][kK]
+transaction_kw	[tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
+isolation_kw	[I][S][O][L][A][T][I][O][N]
+read_kw 		[rR][eE][aA][dD]
+not_deferrable	[nN][oO][tT]{whitespace}+[dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
 
 /* $foo$ style quotes ("dollar quoting")
  * The quoted string starts with $foo$ where "foo" is an optional string
@@ -391,6 +414,115 @@ other			.
 		BEGIN(cur_state->start_state);
 %}
 
+{declare_kw}	{
+					ECHO;
+					BEGIN(dx);
+				}
+
+{begin_kw}{whitespace}*";" {
+					ECHO;
+					BEGIN(INITIAL);
+					return LEXRES_SEMI;
+				}
+
+{begin_kw}		{
+					ECHO;
+					BEGIN(dx);
+					cur_state->begin_depth++;
+				}
+
+<dx>{
+
+{declare_kw}	{
+					ECHO;
+				}
+
+{begin_kw}		{
+					cur_state->begin_depth++;
+					ECHO;
+				}
+{if_kw}			|
+{case_kw}		|
+{loop_kw}		{
+					/*
+					 * handle CASE...END CASE, IF...END IF and LOOP...
+					 * END LOOP cases.
+					 */
+					if (cur_state->begin_depth >= 1)
+						cur_state->begin_depth++;
+					ECHO;
+				}
+{end_kw}		{
+					cur_state->begin_depth--;
+					ECHO;
+				}
+
+{atomic_kw}		{
+					ECHO;
+					if (cur_state->begin_depth == 1)
+						BEGIN(INITIAL);
+				}
+
+{work_kw} 			|
+{transaction_kw}	|
+{isolation_kw}		|
+{read_kw}			|
+{not_deferrable} 	|
+"\\"[;:]		{
+					if (cur_state->begin_depth == 1)
+					{
+						if (yytext[0] == '\\' && yytext[1] == ';')
+						{
+							psqlscan_emit(cur_state, yytext + 1, 1);
+							cur_state->identifier_count = 0;
+						}
+						else
+						{
+							ECHO;
+						}
+						cur_state->begin_depth = 0;
+						BEGIN(INITIAL);
+					}
+				}
+
+{cursor_kw}		|
+{noscroll_kw}	|
+{scroll_kw}		|
+{binary_kw}		|
+{asensitive_kw}	|
+{insensitive_kw} {
+					ECHO;
+					if (cur_state->begin_depth == 0)
+						BEGIN(INITIAL);
+				}
+
+
+^[/]			{
+					/*
+					 * we terminate the block on '/'. However we also need
+					 * to ensure that it's terminating slash and not the
+					 * slash in middle of the statement or block like a
+					 * division operator.
+					 */
+					if (cur_state->begin_depth == 0)
+					{
+						cur_state->start_state = INITIAL;
+						BEGIN(INITIAL);
+						return LEXRES_SLASH;
+					}
+					ECHO;
+				}
+
+{whitespace}	{
+						ECHO;
+				}
+
+{other}			{
+					ECHO;
+				}
+
+} /*<dx>*/
+
 {whitespace}	{
 					/*
 					 * Note that the whitespace rule includes both true
@@ -441,16 +573,17 @@ other			.
 } /* <xc> */
 
 
-{create_fun}		{
-						char *str = pg_strdup(output_buf->data);
-						if (strcasestr(str,"CREATE") != NULL && (strcasestr(str,"PACKAGE") != NULL || (strcasestr(str,"FUNCTION") != NULL && (strcasestr(str,"RETURN") != NULL)) || 
-								strcasestr(str,"PROCEDURE")!= NULL) && strcasestr(str,"RETURNS") == NULL)
-							BEGIN(xf);
-						else
-							BEGIN(INITIAL);
-						ECHO;
-						pg_free(str);
-					}
+
+{create_fun}	{
+					char *str = pg_strdup(output_buf->data);
+					if (strcasestr(str,"CREATE") != NULL && (strcasestr(str,"PACKAGE") != NULL || (strcasestr(str,"FUNCTION") != NULL && (strcasestr(str,"RETURN") != NULL)) ||
+							strcasestr(str,"PROCEDURE")!= NULL) && strcasestr(str,"RETURNS") == NULL)
+						BEGIN(xf);
+					else
+						BEGIN(INITIAL);
+					ECHO;
+					pg_free(str);
+				}
 <xf>{
 {whitespace}	{
 					ECHO;
@@ -1246,6 +1379,7 @@ psql_scan(PsqlScanState state,
 	/* And lex. */
 	lexresult = yylex(NULL, state->scanner);
 
+
 	/*
 	 * Check termination state and return appropriate result info.
 	 */
@@ -1319,6 +1453,10 @@ psql_scan(PsqlScanState state,
 					*prompt = PROMPT_SINGLEQUOTE;
 					break;
 				case xf:
+					result = PSCAN_INCOMPLETE;
+					*prompt = PROMPT_DOLLARQUOTE;
+					break;
+				case dx:
 					result = PSCAN_INCOMPLETE;
 					*prompt = PROMPT_DOLLARQUOTE;
 					break;

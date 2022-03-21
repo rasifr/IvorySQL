@@ -636,11 +636,10 @@ end;
 call test_cur4();
 
 -- test Do structure for CALL
-DO $$
 begin
 	call test_cur4();
 end;
-$$ language plisql;
+/
 
 drop procedure test_cur4();
 drop table emp_;
@@ -941,21 +940,19 @@ drop function shadowtest(int);
 -- runtime extra checks
 set plisql.extra_warnings to 'too_many_rows';
 
-do $$
 declare x int;
 begin
   select v from generate_series(1,2) g(v) into x;
 end;
-$$ language plisql;
+/
 
 set plisql.extra_errors to 'too_many_rows';
 
-do $$
 declare x int;
 begin
   select v from generate_series(1,2) g(v) into x;
 end;
-$$ language plisql;
+/
 
 reset plisql.extra_errors;
 reset plisql.extra_warnings;
@@ -963,7 +960,6 @@ reset plisql.extra_warnings;
 
 set plisql.extra_warnings to 'strict_multi_assignment';
 
-do $$
 declare
   x int;
   y int;
@@ -971,12 +967,11 @@ begin
   select 1 into x, y;
   select 1,2 into x, y;
   select 1,2,3 into x, y;
-end
-$$ language plisql;
+end;
+/
 
 set plisql.extra_errors to 'strict_multi_assignment';
 
-do $$
 declare
   x int;
   y int;
@@ -984,9 +979,8 @@ begin
   select 1 into x, y;
   select 1,2 into x, y;
   select 1,2,3 into x, y;
-end
-$$ language plisql;
-
+end;
+/
 
 create table test_01(a int, b int, c int);
 
@@ -995,7 +989,6 @@ alter table test_01 drop column a;
 -- the check is active only when source table is not empty
 insert into test_01 values(10,20);
 
-do $$
 declare
   x int;
   y int;
@@ -1004,10 +997,9 @@ begin
   raise notice 'ok';
   select * from test_01 into x;    -- should to fail
 end;
-$$ language plisql;
+/
 
 
-do $$
 declare
   t test_01;
 begin
@@ -1015,15 +1007,14 @@ begin
   raise notice 'ok';
   select 1, 2, 3 into t; -- should fail;
 end;
-$$ language plisql;
+/
 
-do $$
 declare
   t test_01;
 begin
   select 1 into t; -- should fail;
 end;
-$$ language plisql;
+/
 
 drop table test_01;
 
@@ -1952,8 +1943,10 @@ drop function sql_to_date(integer) cascade;
 -- used in this session)
 
 begin;
-do $$ declare x text[]; begin x := '{1.23, 4.56}'::numeric[]; end $$;
-do $$ declare x text[]; begin x := '{1.23, 4.56}'::numeric[]; end $$;
+declare x text[]; begin x := '{1.23, 4.56}'::numeric[]; end;
+/
+declare x text[]; begin x := '{1.23, 4.56}'::numeric[]; end;
+/
 end;
 
 -- Test for consistent reporting of error context
@@ -2310,7 +2303,6 @@ drop table tb_cr;
 
 
 -- test PL label
-DO $$
 declare  
 	a int := 1;
 begin  
@@ -2328,7 +2320,7 @@ begin
 	  end loop loop_in;  
 	end loop loop_out;
 end;
-$$ language plisql;
+/
 
 -- test riase EXCEPTION
 create or replace function test_exp() return void 
@@ -2658,3 +2650,81 @@ end;
 $$ language plisql;
 call set_test1();
 drop procedure set_test1;
+
+--test various combinations for anonymous blocks
+DECLARE x CURSOR FOR SELECT * from pg_class;
+DECLARE x BINARY CURSOR FOR select * from pg_class;
+DECLARE x ASENSITIVE CURSOR FOR select * from pg_class;
+DECLARE x INSENSITIVE CURSOR FOR select * from pg_class;
+DECLARE x SCROLL CURSOR FOR select * from pg_class;
+DECLARE x NO SCROLL CURSOR FOR select * from pg_class;
+
+
+BEGIN; END;
+BEGIN WORK; END;
+BEGIN TRANSACTION;
+END;
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+END;
+BEGIN ISOLATION LEVEL SERIALIZABLE;
+END;
+BEGIN READ WRITE;
+END;
+BEGIN NOT DEFERRABLE;
+END;
+
+DECLARE
+	x int;
+BEGIN
+	x := 10;
+	declare
+    x int;
+	begin
+    x := 11;
+    raise info 'x =>>> %', x;
+	end;
+  raise info 'x =>>> %', x;
+END;
+/
+
+begin
+  raise info 'x =>>> %', 0;
+  declare
+    x int;
+	 begin
+    x := 10;
+    raise info 'x =>>> %', x;
+  end;
+end;
+/
+
+declare
+a int := 10;
+b int := 2;
+begin
+a := a
+/ b;
+raise info 'a = %', a;
+end;
+/
+
+declare
+a int := 10;
+b int := 2;
+begin
+a := a
+/b;
+raise info 'a = %', a;
+end;
+/
+
+declare
+a int := 10;
+b int := 2;
+begin
+a := a
+/
+b;
+raise info 'a = %', a;
+end;
+/
